@@ -35,6 +35,10 @@ class ChannelPreset(TypedDict, total=False):
     caption_font_name: str
     # Multi-variant mode — Groq returns translations for each lang, pipeline renders+uploads per variant.
     variants: list[Variant]
+    # topic_rotation: "myth" → pipeline/myth_topics.py (IST day theme + no-repeat within theme)
+    topic_rotation: str
+    # Single-variant YouTube upload: which env var holds this channel's refresh token
+    yt_token_env: str
 
 
 PRESETS: dict[str, ChannelPreset] = {
@@ -192,6 +196,38 @@ PRESETS: dict[str, ChannelPreset] = {
             "superstitions with real origins", "things that didn't exist 20 years ago",
             "urban legends debunked", "numbers with dark histories",
         ],
+    },
+    "hindi_myth": {
+        "id": "hindi_myth",
+        "label": "Hindi mythology & devotion Shorts (Ganesha → Shiva → … by IST day)",
+        "topic_rotation": "myth",
+        "language": "hi",
+        # Edge TTS Hindi: Swara = warm female (common for katha / devotion). Override: hi-IN-MadhurNeural (male).
+        "tts_voice": "hi-IN-SwaraNeural",
+        "caption_font": "NotoSansDevanagari-Bold.ttf",
+        "caption_font_name": "Noto Sans Devanagari",
+        "yt_token_env": "YT_REFRESH_TOKEN_MYTH",
+        "groq_system_hint": (
+            "You write respectful Hindi Shorts about Indian mythology, epics, and devotion — for a general audience. "
+            "LANGUAGE: full_narration, youtube_title, youtube_description entirely in Devanagari Hindi. "
+            "IMAGE PROMPTS: English only — cinematic scene descriptions (no text in image). "
+            "CRITICAL LENGTH: full_narration 105-135 Devanagari words (~40-50 sec spoken). "
+            "Tone: warm, storytelling, reverent — NOT mocking faith. Retell traditional narratives in your own words; "
+            "do not copy long scripture passages. PG-13, no graphic gore, no hate toward any group. "
+            "No hashtags in narration. The creator gives a specific story angle in the user message — stay on that topic."
+        ),
+        "segment_count": 6,
+        "image_style_suffix": (
+            ", cinematic Indian mythology digital painting, golden hour lighting, rich jewel tones, "
+            "detailed divine atmosphere, epic composition, respectful devotional art style, "
+            "high quality illustration, no text, no watermark, no logos"
+        ),
+        "image_negative_prompt": (
+            "photorealistic human face close-up as real celebrity, gore, blood, horror jumpscare, "
+            "disrespectful parody, political symbols, watermark, text, logo, blurry, low quality, "
+            "multiple conflicting styles, broken anatomy"
+        ),
+        "topic_pool": [],
     },
     "school_story": {
         "id": "school_story",
