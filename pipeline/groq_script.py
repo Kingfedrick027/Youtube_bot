@@ -20,7 +20,12 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 # ── Language-specific word-count guidance ──────────────────────────────
 LANG_WORD_TARGETS = {
-    "en": (120, 150, "120-150 English words (35-45 sec spoken)"),
+    "en": (
+        120,
+        155,
+        "120-155 English words for variants.en.full_narration (~40-50 sec); "
+        "add transitions, examples, and a closing takeaway — NOT a bullet list",
+    ),
     "hi": (
         135,
         170,
@@ -28,7 +33,7 @@ LANG_WORD_TARGETS = {
     ),
 }
 
-# LLMs undershoot the ideal band; minimum floor avoids flaky CI while prompts push higher counts.
+# Bilingual presets override per variant; these are fallbacks only.
 DEFAULT_MIN_WORDS = {"hi": 80, "en": 80}
 
 
@@ -180,28 +185,31 @@ STRICT RULES:
 {word_targets}
 - Narrations are continuous spoken paragraphs — no segment numbers, no headings.
 - Titles/descriptions: each in its own language.
+- BEFORE you output JSON: mentally count words in each full_narration. If English is under 115 words OR Hindi under 100 words, REWRITE that paragraph longer (same facts) until counts are met.
 """
 
     last_err: str | None = None
-    for attempt in range(2):
+    max_attempts = 4
+    for attempt in range(max_attempts):
         extra = ""
         if last_err:
             extra = (
                 "\n\n=== REGENERATE (previous JSON failed validation) ===\n"
                 f"{last_err}\n"
                 "Return a NEW complete JSON object that fixes the issue. "
-                "Keep the same facts/story; meet every word-count floor.\n"
+                "Keep the same facts/story and the same image_prompts beats; "
+                "expand ONLY the narration(s) that were too short — add 3-5 full sentences each.\n"
             )
-        data = _call_groq(preset, user + extra)
+        # Later attempts: lower temperature so the model obeys length constraints more reliably.
+        temp = 0.85 if attempt < 2 else 0.45
+        data = _call_groq(preset, user + extra, temperature=temp)
         try:
             _assert_multivariant_valid(data, variants, n)
             return data
         except ValueError as e:
             last_err = str(e)
-            if attempt == 1:
+            if attempt == max_attempts - 1:
                 raise
-
-    raise RuntimeError("unreachable")
 
 
 def _assert_multivariant_valid(data: dict[str, Any], variants: list, n: int) -> None:
@@ -239,7 +247,12 @@ def _assert_multivariant_valid(data: dict[str, Any], variants: list, n: int) -> 
             raise ValueError(f"variants['{lang}'].youtube_title empty")
 
 
-def _call_groq(preset: ChannelPreset, user: str) -> dict[str, Any]:
+def _call_groq(
+    preset: ChannelPreset,
+    user: str,
+    *,
+    temperature: float = 0.85,
+) -> dict[str, Any]:
     client = Groq(api_key=os.environ["GROQ_API_KEY"])
     resp = client.chat.completions.create(
         model=GROQ_MODEL,
@@ -247,8 +260,8 @@ def _call_groq(preset: ChannelPreset, user: str) -> dict[str, Any]:
             {"role": "system", "content": preset["groq_system_hint"]},
             {"role": "user", "content": user},
         ],
-        temperature=0.85,
-        max_tokens=2048,
+        temperature=temperature,
+        max_tokens=3072,
         response_format={"type": "json_object"},
     )
     raw = resp.choices[0].message.content

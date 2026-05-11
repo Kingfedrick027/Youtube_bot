@@ -58,7 +58,7 @@ PRESETS: dict[str, ChannelPreset] = {
                 "caption_font": "BebasNeue-Regular.ttf",
                 "caption_font_name": "Bebas Neue",
                 "yt_token_env": "YT_REFRESH_TOKEN_EN",
-                "min_words": 80,
+                "min_words": 70,
             },
         ],
         "groq_system_hint": (
@@ -78,7 +78,10 @@ PRESETS: dict[str, ChannelPreset] = {
             "do not literally translate word-for-word; rephrase so each version sounds native and flows well. "
             "HINDI LENGTH: variants.hi.full_narration should be long-form — "
             "aim ~150 Devanagari words (acceptable band roughly 135-170) with rich detail and connective phrases "
-            "so the Hindi voiceover is substantial (~55-70 seconds)."
+            "so the Hindi voiceover is substantial (~55-70 seconds). "
+            "ENGLISH LENGTH: variants.en.full_narration must be long-form too — "
+            "aim 120-155 English words (never a short teaser); include hook, 3-4 developed beats with examples, "
+            "and a strong closing line so the English voiceover is ~40-50 seconds."
         ),
         "segment_count": 5,
         "image_style_suffix": (
