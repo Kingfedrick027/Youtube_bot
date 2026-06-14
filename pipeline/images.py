@@ -1,22 +1,21 @@
-"""Image generation via HuggingFace Inference API (free tier)."""
+"""Image generation via Pollinations.ai (free, no API key required)."""
 from __future__ import annotations
 
-import os
 import time
+import urllib.parse
 from pathlib import Path
 
 import httpx
 
-HF_API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
-
 STYLE_SUFFIX = (
-    ", cinematic digital illustration, detailed scene art, strong composition, "
-    "professional youtube visual quality, no text, no captions, no watermark, no logos"
+    ", cinematic photography, dramatic lighting, ultra detailed, "
+    "8k, sharp focus, professional camera, financial aesthetic, "
+    "moody contrast, depth of field, no text, no captions, no watermark, no logos"
 )
 
 DEFAULT_NEGATIVE = (
     "blurry, low quality, watermark, logo, text, title, signature, ugly, grainy, "
-    "gore, blood, nudity, child-unsafe"
+    "cartoon, anime, illustration, gore, blood, nudity, child-unsafe"
 )
 
 
@@ -25,62 +24,60 @@ def full_visual_prompt(scene: str, style_suffix: str | None = None) -> str:
     return f"{scene.strip()}{(style_suffix or STYLE_SUFFIX)}"
 
 
-def _hf_generate(
+def _pollinations_generate(
     prompt: str,
     *,
-    api_key: str,
-    negative_prompt: str = DEFAULT_NEGATIVE,
     width: int = 768,
     height: int = 768,
+    seed: int | None = None,
     max_retries: int = 5,
 ) -> bytes:
-    """Call HuggingFace Inference API and return raw image bytes."""
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "Accept": "image/png",
-    }
+    """Call Pollinations.ai and return raw image bytes."""
+    encoded_prompt = urllib.parse.quote(prompt)
+    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
 
-    payload = {
-        "inputs": prompt,
-        "parameters": {
-            "negative_prompt": negative_prompt,
-            "width": width,
-            "height": height,
-            "num_inference_steps": 30,
-            "guidance_scale": 7.5,
-        },
+    params = {
+        "width": width,
+        "height": height,
+        "nologo": "true",
+        "enhance": "true",
     }
+    if seed is not None:
+        params["seed"] = seed
 
-    with httpx.Client(timeout=120.0) as client:
+    with httpx.Client(timeout=120.0, follow_redirects=True) as client:
         for attempt in range(1, max_retries + 1):
-            resp = client.post(HF_API_URL, json=payload, headers=headers)
+            try:
+                resp = client.get(url, params=params)
 
-            # Model still loading — wait and retry
-            if resp.status_code == 503:
-                wait = 20 * attempt
-                print(f"      HF model loading — waiting {wait}s (attempt {attempt}/{max_retries})…")
+                if resp.status_code == 429:
+                    wait = 20 * attempt
+                    print(f"      Pollinations rate limit — waiting {wait}s (attempt {attempt}/{max_retries})...")
+                    time.sleep(wait)
+                    continue
+
+                if resp.status_code == 503:
+                    wait = 15 * attempt
+                    print(f"      Pollinations unavailable — waiting {wait}s (attempt {attempt}/{max_retries})...")
+                    time.sleep(wait)
+                    continue
+
+                resp.raise_for_status()
+
+                content_type = resp.headers.get("content-type", "")
+                if "image" in content_type:
+                    print(f"      Pollinations image done (attempt {attempt})")
+                    return resp.content
+
+                raise RuntimeError(f"Unexpected response: {resp.status_code} {resp.text[:200]}")
+
+            except httpx.TimeoutException:
+                wait = 10 * attempt
+                print(f"      Pollinations timeout — waiting {wait}s (attempt {attempt}/{max_retries})...")
                 time.sleep(wait)
                 continue
 
-            # Rate limited — wait and retry
-            if resp.status_code == 429:
-                wait = 30 * attempt
-                print(f"      HF rate limit — waiting {wait}s (attempt {attempt}/{max_retries})…")
-                time.sleep(wait)
-                continue
-
-            resp.raise_for_status()
-
-            content_type = resp.headers.get("content-type", "")
-            if "image" in content_type:
-                print(f"      HF image done (attempt {attempt})")
-                return resp.content
-
-            # Unexpected response
-            raise RuntimeError(f"HF unexpected response: {resp.status_code} {resp.text[:200]}")
-
-        raise RuntimeError(f"HF failed after {max_retries} attempts")
+        raise RuntimeError(f"Pollinations failed after {max_retries} attempts")
 
 
 def save_scene_image(
@@ -93,22 +90,19 @@ def save_scene_image(
     negative: str = DEFAULT_NEGATIVE,
 ) -> tuple[str, str]:
     """Generate and save one image. Returns (status, detail)."""
-    api_key = os.environ.get("HF_TOKEN", "").strip()
-    if not api_key:
-        return "fail", "HF_TOKEN not set"
-
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    seed = 1000 + index * 137
+
     try:
-        img_bytes = _hf_generate(
+        img_bytes = _pollinations_generate(
             prompt,
-            api_key=api_key,
-            negative_prompt=negative,
             width=width,
             height=height,
+            seed=seed,
         )
         out_path.write_bytes(img_bytes)
-        return "ok", "huggingface"
+        return "ok", "pollinations"
     except Exception as e:
         return "fail", str(e)
