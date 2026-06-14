@@ -1,15 +1,13 @@
-"""Image generation via DeAPI.ai (async: submit → poll → download)."""
+"""Image generation via HuggingFace Inference API (free tier)."""
 from __future__ import annotations
 
 import os
-import random
 import time
 from pathlib import Path
 
 import httpx
 
-DEAPI_SUBMIT_URL = "https://api.deapi.ai/api/v1/client/txt2img"
-DEAPI_POLL_URL = "https://api.deapi.ai/api/v1/client/request-status"
+HF_API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
 
 STYLE_SUFFIX = (
     ", cinematic digital illustration, detailed scene art, strong composition, "
@@ -27,89 +25,62 @@ def full_visual_prompt(scene: str, style_suffix: str | None = None) -> str:
     return f"{scene.strip()}{(style_suffix or STYLE_SUFFIX)}"
 
 
-def _deapi_generate(
+def _hf_generate(
     prompt: str,
     *,
     api_key: str,
-    width: int,
-    height: int,
-    model: str,
-    max_polls: int = 30,
-    poll_interval: float = 3.0,
+    negative_prompt: str = DEFAULT_NEGATIVE,
+    width: int = 768,
+    height: int = 768,
+    max_retries: int = 5,
 ) -> bytes:
-    """Submit image job, poll until done, download result."""
+    """Call HuggingFace Inference API and return raw image bytes."""
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "Accept": "application/json",
+        "Accept": "image/png",
     }
 
-    # Step 1: Submit
     payload = {
-        "prompt": prompt,
-        "model": model,
-        "width": width,
-        "height": height,
-        "steps": 4,
-        "seed": random.randint(1, 999999),
+        "inputs": prompt,
+        "parameters": {
+            "negative_prompt": negative_prompt,
+            "width": width,
+            "height": height,
+            "num_inference_steps": 30,
+            "guidance_scale": 7.5,
+        },
     }
 
-    with httpx.Client(timeout=60.0) as client:
-        # Submit with retry on 429
-        for submit_try in range(5):
-            resp = client.post(DEAPI_SUBMIT_URL, json=payload, headers=headers)
-            if resp.status_code == 429:
-                wait = 15 * (submit_try + 1)
-                print(f"      DeAPI 429 on submit — waiting {wait}s (try {submit_try + 1}/5)…")
+    with httpx.Client(timeout=120.0) as client:
+        for attempt in range(1, max_retries + 1):
+            resp = client.post(HF_API_URL, json=payload, headers=headers)
+
+            # Model still loading — wait and retry
+            if resp.status_code == 503:
+                wait = 20 * attempt
+                print(f"      HF model loading — waiting {wait}s (attempt {attempt}/{max_retries})…")
                 time.sleep(wait)
                 continue
+
+            # Rate limited — wait and retry
+            if resp.status_code == 429:
+                wait = 30 * attempt
+                print(f"      HF rate limit — waiting {wait}s (attempt {attempt}/{max_retries})…")
+                time.sleep(wait)
+                continue
+
             resp.raise_for_status()
-            break
-        else:
-            raise RuntimeError("DeAPI: 429 on submit after 5 retries")
 
-        data = resp.json()
+            content_type = resp.headers.get("content-type", "")
+            if "image" in content_type:
+                print(f"      HF image done (attempt {attempt})")
+                return resp.content
 
-        request_id = data.get("data", {}).get("request_id")
-        if not request_id:
-            raise RuntimeError(f"No request_id in DeAPI response: {data}")
-        print(f"      DeAPI submitted (id: {request_id})")
+            # Unexpected response
+            raise RuntimeError(f"HF unexpected response: {resp.status_code} {resp.text[:200]}")
 
-        # Step 2: Poll
-        poll_headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Accept": "application/json",
-        }
-
-        for attempt in range(1, max_polls + 1):
-            time.sleep(poll_interval)
-
-            poll_resp = client.get(
-                f"{DEAPI_POLL_URL}/{request_id}",
-                headers=poll_headers,
-                timeout=30.0,
-            )
-            poll_resp.raise_for_status()
-            poll_data = poll_resp.json()
-
-            status = poll_data.get("data", {}).get("status", "")
-
-            if status in ("completed", "success", "done"):
-                image_url = poll_data["data"].get("result_url")
-                if not image_url:
-                    raise RuntimeError(f"Completed but no result_url: {poll_data}")
-
-                img_resp = client.get(image_url, timeout=60.0)
-                img_resp.raise_for_status()
-                print(f"      DeAPI done (polled {attempt}x)")
-                return img_resp.content
-
-            if status in ("failed", "error"):
-                raise RuntimeError(f"DeAPI image failed: {poll_data}")
-
-            # Still processing — keep polling
-
-        raise RuntimeError(f"DeAPI timed out after {max_polls} polls for {request_id}")
+        raise RuntimeError(f"HF failed after {max_retries} attempts")
 
 
 def save_scene_image(
@@ -122,23 +93,22 @@ def save_scene_image(
     negative: str = DEFAULT_NEGATIVE,
 ) -> tuple[str, str]:
     """Generate and save one image. Returns (status, detail)."""
-    api_key = os.environ.get("DEAPI_TOKEN", "").strip()
+    api_key = os.environ.get("HF_TOKEN", "").strip()
     if not api_key:
-        return "fail", "DEAPI_TOKEN not set"
+        return "fail", "HF_TOKEN not set"
 
-    model = os.environ.get("DEAPI_MODEL", "Flux_2_Klein_4B_BF16")
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        img_bytes = _deapi_generate(
+        img_bytes = _hf_generate(
             prompt,
             api_key=api_key,
+            negative_prompt=negative,
             width=width,
             height=height,
-            model=model,
         )
         out_path.write_bytes(img_bytes)
-        return "ok", "deapi"
+        return "ok", "huggingface"
     except Exception as e:
         return "fail", str(e)
