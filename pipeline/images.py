@@ -34,16 +34,17 @@ def _pollinations_generate(
 ) -> bytes:
     """Call Pollinations.ai and return raw image bytes."""
     encoded_prompt = urllib.parse.quote(prompt)
-    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
 
     params = {
         "width": width,
         "height": height,
         "nologo": "true",
-        "enhance": "true",
+        "model": "flux",
     }
     if seed is not None:
         params["seed"] = seed
+
+    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
 
     with httpx.Client(timeout=120.0, follow_redirects=True) as client:
         for attempt in range(1, max_retries + 1):
@@ -61,6 +62,9 @@ def _pollinations_generate(
                     print(f"      Pollinations unavailable — waiting {wait}s (attempt {attempt}/{max_retries})...")
                     time.sleep(wait)
                     continue
+
+                if resp.status_code == 402:
+                    raise RuntimeError("Pollinations 402 — feature not available on free tier")
 
                 resp.raise_for_status()
 
